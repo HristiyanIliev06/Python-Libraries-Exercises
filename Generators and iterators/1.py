@@ -2,7 +2,7 @@ def token_batches(filepath, batch_size):
     with open(filepath) as f:
         batch = []
         for line in f:
-            tokens = line.strip().split(" ")
+            tokens = line.strip().split()
             if not tokens:
                 continue
             batch.extend(tokens)
@@ -13,4 +13,7 @@ def token_batches(filepath, batch_size):
             yield batch
 
 
-print(list(token_batches("The 5 projects.txt", 5)))
+# print(list(token_batches("The 5 projects.txt", 5)))
+
+for batch in list(token_batches("The 5 projects.txt", 5)):
+    print(batch)

@@ -31,19 +31,6 @@ class Pipeline:
         return f"Pipeline({self.iterator})"
 
 
-def token_batches(filepath, batch_size):
-    with open(filepath) as f:
-        batch = []
-        for line in f:
-            tokens = line.strip().split()
-            batch.extend(tokens)
-            if len(batch) >= batch_size:
-                yield batch[batch_size]
-                batch = batch[batch_size:]
-        if batch:
-            yield batch
-
-
 pipeline = (
     Pipeline(open("The 5 projects.txt"))
     .map(str.strip)
