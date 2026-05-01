@@ -23,7 +23,7 @@ class TokenBatcher:
 
 token_batcher = TokenBatcher("The 5 projects.txt", 5)
 
-#print(list(token_batcher))
+# print(list(token_batcher))
 
 for token in token_batcher:
     print(token)
