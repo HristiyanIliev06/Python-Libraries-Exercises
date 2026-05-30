@@ -1,0 +1,158 @@
+================================================================
+TOPIC 2 — TYPE HINTS AND RUNTIME VALIDATION
+CONCEPT 3 — Protocol
+================================================================
+
+CORE PURPOSE
+------------
+Defines a type by what it can DO, not what it inherits from.
+Enables structural subtyping — duck typing with type checker
+support. Any class that implements the required methods satisfies
+the Protocol, regardless of inheritance hierarchy.
+
+BASIC SYNTAX
+------------
+from typing import Protocol
+
+class Describable(Protocol):
+    def describe(self) -> str: ...
+
+Protocol methods use ... as the body — they define interface,
+not implementation. A body implies default behaviour, which is
+what abstract base classes are for, not Protocols.
+
+NOMINAL VS STRUCTURAL SUBTYPING
+--------------------------------
+Nominal (default Python):
+    B satisfies A only if B inherits from A.
+
+Structural (Protocol):
+    B satisfies Protocol if B has the required methods/attributes,
+    regardless of inheritance.
+
+def process(item: Describable) -> None:
+    print(item.describe())
+
+Any class with .describe() -> str works. No inheritance needed.
+
+PROTOCOL WITH PROPERTIES
+-------------------------
+@property must be declared explicitly in the Protocol:
+
+class BatchSource(Protocol):
+    @property
+    def description(self) -> str: ...
+
+Accessed as source.description, not source.description().
+Implementations must also use @property.
+
+PROTOCOL WITH Generic
+---------------------
+from typing import Protocol, TypeVar
+from collections.abc import Iterator
+
+T_co = TypeVar("T_co", covariant=True)
+
+class DataSource(Protocol[T_co]):
+    def __iter__(self) -> Iterator[T_co]: ...
+    def __len__(self) -> int: ...
+
+DataSource[str] — any class iterating over strings with a length.
+Protocol and Generic compose naturally.
+
+__iter__ RETURN TYPE
+--------------------
+__iter__ returns an Iterator, not a list:
+
+from collections.abc import Iterator
+
+def __iter__(self) -> Iterator[list[str]]: ...
+
+When yield is used inside __iter__, Python makes it a generator
+which is an Iterator. Annotating as list[str] is wrong.
+
+runtime_checkable
+-----------------
+from typing import runtime_checkable
+
+@runtime_checkable
+class Serializable(Protocol):
+    def to_dict(self) -> dict: ...
+
+Enables isinstance() checks at runtime:
+    isinstance(obj, Serializable)  # True if obj has .to_dict()
+
+CAVEAT: isinstance only checks method PRESENCE, not signatures.
+Full structural check only happens in the type checker.
+
+CLASSMETHOD IN PROTOCOL — AVOID
+--------------------------------
+@classmethod in a Protocol is a known rough edge:
+- runtime_checkable isinstance only checks presence, not whether
+  it is actually a classmethod
+- mypy and pyright handle it inconsistently
+
+Convention: keep Protocols to instance methods only.
+Factory/constructor methods belong on the concrete class.
+
+If you need to enforce a constructor interface:
+    → use an abstract base class with @classmethod @abstractmethod
+
+PROTOCOL VS ABSTRACT BASE CLASS
+--------------------------------
+Protocol    — enforce runtime behaviour across unrelated classes
+              without inheritance. Structural.
+ABC         — enforce construction interface or share default
+              implementation across related classes. Nominal.
+
+yield from
+----------
+yield from iterable is idiomatic shorthand for:
+    for item in iterable:
+        yield item
+
+Use in __iter__ implementations that delegate to an inner list.
+
+PARTIAL BATCH — ALWAYS YIELD REMAINDER
+---------------------------------------
+When batching in __iter__, always yield the final partial batch:
+
+    batch = []
+    for item in self.data:
+        batch.append(item)
+        if len(batch) == self.batch_size:
+            yield batch
+            batch = []
+    if batch:        # ← never drop the remainder
+        yield batch
+
+WHEN TO USE Protocol
+--------------------
+- Function accepts multiple unrelated implementations
+  (tokenizers, data sources, model backends)
+- You want to type-check duck typing without forcing inheritance
+- Third-party classes need to satisfy your interface without
+  modification
+- Testing — mock implementations satisfy the same Protocol
+  as production implementations
+
+WHEN NOT TO USE Protocol
+-------------------------
+- You need shared default implementation → use ABC
+- You need to enforce constructor signatures → use ABC
+- The interface involves classmethods or staticmethods → use ABC
+- You own all implementations and inheritance is clean → ABC or
+  plain class hierarchy is simpler
+
+================================================================
+EXERCISES WRITTEN
+================================================================
+warm_up.py    — Describable Protocol, ModelCard, DatasetInfo
+                no shared inheritance, both satisfy Protocol
+challenge.py  — BatchSource Protocol with __iter__, __len__,
+                description property. FileSource and MockSource
+                implementations. run_pipeline function.
+debugging.py  — Serializable Protocol: fixed instance method to
+                @classmethod, added @dataclass, removed @classmethod
+                from Protocol definition
+================================================================
