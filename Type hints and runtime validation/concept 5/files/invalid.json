@@ -1,0 +1,9 @@
+{
+  "experiment_name": "sentiment_baseline",
+  "model_type": "bert",
+  "learning_rate": 0.0003,
+  "batch_size": 32,
+  "epochs": 10,
+  "device": "TPU",
+  "tags": ["nlp", "baseline", "v1"]
+}
