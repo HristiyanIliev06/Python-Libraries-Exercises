@@ -21,8 +21,8 @@ def summarize_config(config: ExperimentConfig) -> str:
     {config.model_type} on {config.device} for {config.epochs} epochs
     with learning rate {config.learning_rate} and {len(config.tags)} tags."""
 
-path_to_valid = "Type hints and runtime validation/concept 5/files/valid.json"
-path_to_invalid = "Type hints and runtime validation/concept 5/files/invalid.json"
+path_to_valid = "Type hints and runtime validation/concept 5/subconcept 1/files/valid.json"
+path_to_invalid = "Type hints and runtime validation/concept 5/subconcept 1/files/invalid.json"
 
 print(summarize_config(load_experiment_config(path_to_valid)))
 
