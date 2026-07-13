@@ -1,0 +1,1 @@
+{"experiment_name":"test_experiment","device":"cuda","seed":42,"data":{"train_path":"data/train.csv","val_path":"data/val.csv","max_samples":1000,"num_workers":4},"model":{"architecture":"transformer","hidden_dim":256,"num_layers":4,"dropout":0.1},"optimizer":{"name":"adam","lr":0.001,"weight_decay":0.01},"scheduler":{"name":"cosine","max_steps":10000,"warmup_steps":1000}}
