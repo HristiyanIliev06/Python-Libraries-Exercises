@@ -1,0 +1,141 @@
+=============================================================
+NUMPY TOPIC 3 — VECTORIZATION
+Revision Report
+=============================================================
+
+CORE PURPOSE
+------------
+Vectorization means expressing operations on entire arrays instead
+of looping over elements. NumPy operations drop into compiled C/Fortran
+and process arrays in one call — typically 50–200× faster than Python
+loops. In ML this covers normalization, activation functions, loss
+computation, outlier handling, and label encoding — all without a
+single loop.
+
+KEY SYNTAX
+----------
+# Element-wise arithmetic
+a + b, a * b, a ** 2, a / scalar
+
+# Universal functions (ufuncs) — elementwise, compiled
+np.sqrt(a)
+np.log(a)
+np.exp(a)
+np.abs(a)
+np.sign(a)
+np.clip(a, low, high)       # both bounds required (use None for open)
+np.clip(a, -2, None)        # lower clip only
+np.clip(a, None, 10)        # upper clip only
+
+# Conditional replacement
+np.where(condition, value_if_true, value_if_false)  # all 3 args required
+
+# Multi-condition branching
+np.select(conditions, choices, default=...)         # default always explicit
+
+# Counting elements meeting a condition
+np.sum(a < 0)               # counts True values in boolean array
+
+# NOT true vectorization
+np.vectorize(fn)            # convenience wrapper — same speed as a loop
+
+PATTERNS
+--------
+# Z-score normalization — global
+X_norm = (X - X.mean()) / X.std()
+
+# Z-score normalization — per column
+X_norm = (X - X.mean(axis=0)) / X.std(axis=0)
+
+# Min-max scaling
+X_scaled = (X - X.min()) / (X.max() - X.min())
+
+# ReLU activation
+relu = np.where(X < 0, 0, X)
+
+# Outlier replacement with clean-values-only statistic
+col = X[:, i]
+clean_mean = col[col <= threshold].mean()    # exclude outliers first
+X[:, i] = np.where(col > threshold, clean_mean, col)
+
+# Missing value imputation
+col = X[:, i]
+valid_median = np.median(col[col != sentinel])  # exclude sentinels first
+X[:, i] = np.where(col == sentinel, valid_median, col)
+
+# Label encoding without loops
+conditions = [labels == 'cat', labels == 'dog', labels == 'bird']
+encoded = np.select(conditions, [0, 1, 2], default=-1)
+
+# Replace np.vectorize with ufuncs
+np.log(np.abs(X) + 1) * np.sign(X)    # fast
+np.vectorize(fn)(X)                    # same speed as a loop — avoid
+
+GOTCHAS
+-------
+1. np.where requires all three arguments
+   np.where(cond, a)          → behaves like np.argwhere, returns indices
+   np.where(cond, a, b)       → correct elementwise conditional
+
+2. np.clip requires both bounds (use None for open-ended)
+   np.clip(a, -2)             → missing upper bound, error
+   np.clip(a, -2, None)       → correct lower-only clip
+
+3. np.select default should always be explicit
+   np.select(conds, choices)              → implicit default=0, fragile
+   np.select(conds, choices, default=-1) → explicit, safe
+
+4. Statistic must be computed on clean values only
+   col.mean()                        → contaminated by outliers/sentinels
+   col[col <= threshold].mean()      → clean values only, correct
+
+5. np.vectorize is not vectorization
+   It is a Python loop with a nicer interface — no speed gain
+   Always replace with ufuncs, np.where, or np.select
+
+6. Global vs per-column normalization
+   X.mean()          → scalar, global mean across entire matrix
+   X.mean(axis=0)    → shape (n_cols,), one mean per column
+   Per-column is almost always what you want in ML preprocessing
+
+7. Method calls need parentheses
+   a.min    → method reference, prints object descriptor
+   a.min()  → actual call, returns value
+
+WHEN TO USE WHAT
+----------------
+np.where      → single condition, two outcomes
+np.select     → multiple conditions, multiple outcomes
+np.clip       → clamping to a numeric range
+ufuncs        → math transforms (log, exp, sqrt, abs, sign)
+np.sum(mask)  → counting elements that meet a condition
+np.vectorize  → never for performance; only for quick prototyping
+               on small arrays where correctness matters more than speed
+
+EXERCISES COMPLETED
+-------------------
+Warm-up:
+  - Global z-score normalization of (100,5) matrix
+  - ReLU via np.where, count clipped values with np.sum(X < 0)
+
+Challenge:
+  - Outlier replacement in feature col using clean-values-only mean
+  - Missing sentinel replacement using valid-values-only median
+  - Min-max scaling of full matrix
+  - Label encoding with np.select
+  - Verification of shape, dtype, min(), max()
+
+Debugging:
+  Bugs found and fixed:
+  1. X.mean() / X.std() → X.mean(axis=0) / X.std(axis=0)
+     global stats used instead of per-column
+  2. np.where(cond, a) → np.where(cond, a, 0)
+     missing third argument
+  3. np.clip(X, -2) → np.clip(X, -2, None)
+     missing upper bound
+  4. np.select(...) → np.select(..., default=-1)
+     missing explicit default
+  5. np.vectorize(transform) → np.log(np.abs(X)+1) * np.sign(X)
+     np.vectorize has no performance advantage over a loop
+
+=============================================================

@@ -1,0 +1,120 @@
+PYDANTIC V2 — TOPIC 4: MODEL VALIDATORS (@model_validator)
+Revision Report
+============================================================
+
+NOTE: Exercise names are reconstructed approximations — actual session names may differ.
+      Bug log is confirmed from tracked session patterns.
+
+
+CORE PURPOSE
+------------
+@model_validator runs at the model level, not per-field. It can inspect multiple
+fields simultaneously. Two modes: "before" (receives raw input before any parsing)
+and "after" (receives the fully parsed, validated model instance). Use it for
+cross-field invariants and for normalising raw input structures.
+
+
+SYNTAX
+------
+from pydantic import BaseModel, model_validator
+from typing import Self
+
+# mode="after" — cross-field invariant on a fully parsed instance
+class SplitConfig(BaseModel):
+    train: float
+    val: float
+    test: float
+
+    @model_validator(mode="after")
+    def check_splits_sum(self) -> Self:
+        total = self.train + self.val + self.test
+        if abs(total - 1.0) > 1e-6:
+            raise ValueError(f"Splits must sum to 1.0, got {total:.4f}")
+        return self          # ← MANDATORY
+
+
+# mode="before" — normalise raw input before field parsing
+class PipelineInputConfig(BaseModel):
+    features: list[str]
+    target: str
+
+    @model_validator(mode="before")
+    @classmethod                   # ← REQUIRED for mode="before"
+    def coerce_features(cls, data: dict) -> dict:
+        if isinstance(data.get("features"), str):
+            data["features"] = [f.strip() for f in data["features"].split(",")]
+        return data                # ← return the (mutated) dict
+
+
+RULES
+-----
+mode="after":
+  - Instance method: first arg is self (the model instance).
+  - NO @classmethod.
+  - Must return self (or a new model instance).
+  - Runs after ALL field validators have passed.
+
+mode="before":
+  - Class method: first arg is cls.
+  - REQUIRES @classmethod.
+  - Receives raw input (dict, or whatever was passed in).
+  - Must return the (possibly mutated) raw data — NOT a model instance.
+  - Field validators then run on the returned data.
+
+In both modes: raise ValueError, never ValidationError.
+
+
+GOTCHAS
+-------
+! Missing return self in mode="after":
+  Pydantic receives None instead of the model instance and raises a confusing
+  internal error. Always end mode="after" validators with return self.
+
+! @classmethod on mode="after":
+  Wrong. mode="after" is an instance method. Applying @classmethod on it will
+  confuse the signature — self becomes a class, not an instance.
+  Rule: mode="before" → @classmethod. mode="after" → no decorator, use self.
+
+! mode="before" receives raw data, not a model instance:
+  Do NOT access self in mode="before". Do NOT call model methods. You are working
+  with an unvalidated dict (or other input type).
+
+! Mutation in mode="before":
+  You may mutate data in place and return it, OR create a new dict and return that.
+  Both are fine. The downstream field validators then process the returned dict.
+
+! mode="after" runs AFTER all field validators succeed. If a field validator raises,
+  the model validator never runs.
+
+! A model can have multiple @model_validators — they run in definition order.
+
+
+PATTERNS
+--------
+- Use mode="after" for cross-field invariants:
+    train + val + test == 1.0
+    start_date < end_date
+    max_val > min_val
+- Use mode="before" for input normalization:
+    str → list coercion
+    renaming legacy key names
+    injecting computed fields before parsing
+- Combine: mode="before" for shape normalization, mode="after" for semantic checks.
+- Self import: from typing import Self — use as the return type of mode="after".
+
+
+WHEN TO USE / NOT USE
+---------------------
+Use @model_validator when validation logic REQUIRES two or more fields together.
+Do NOT use it for single-field rules — @field_validator is cleaner and more precise.
+Do NOT put normalization that belongs in a field validator into model_validator just
+for convenience — it makes the validation graph harder to follow.
+
+
+EXERCISES WRITTEN (reconstructed)
+----------------------------------
+1. Warm-up: TrainValSplit — mode="after" validator confirming proportions sum to 1.0.
+2. Challenge: PipelineInputConfig — mode="before" raw input coercion (str → list)
+   + mode="after" cross-field invariant check (valid ratio range).
+3. Debugging: Fix broken model validators — @classmethod misplaced on mode="after",
+   missing return self, incorrect mode used for the given logic.

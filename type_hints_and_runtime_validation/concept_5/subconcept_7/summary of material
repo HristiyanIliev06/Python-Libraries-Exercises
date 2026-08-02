@@ -1,0 +1,161 @@
+══════════════════════════════════════════════════════════════════
+PYDANTIC V2 — TOPIC 7: SERIALIZATION / DESERIALIZATION
+Revision Report
+══════════════════════════════════════════════════════════════════
+
+CORE PURPOSE
+────────────
+Convert Pydantic models to and from JSON/dict for persistence,
+transmission, and round-trip integrity. Pydantic provides
+first-class methods for all four directions: model → dict,
+model → JSON string, dict → model, JSON string → model.
+
+
+CORE METHODS
+────────────
+model.model_dump()                → dict (Python-native)
+model.model_dump_json()           → JSON string
+Model.model_validate(data)        → model instance from dict
+Model.model_validate_json(s)      → model instance from JSON string
+
+These are the canonical Pydantic v2 entry/exit points.
+Never substitute json.loads() + model_validate() for model_validate_json().
+Never substitute **kwargs construction for model_validate().
+
+
+model_dump() PARAMETERS
+────────────────────────
+exclude_none=True      omit fields whose value is None
+exclude_defaults=True  omit fields at their declared default
+include={"f1","f2"}    whitelist: only these fields
+exclude={"f1"}         blacklist: all fields except these
+
+These parameters compose. exclude_none and exclude_defaults
+can silently drop Optional fields — be careful with round-trips
+on models that have optional fields with no values set.
+
+
+ROUND-TRIP INTEGRITY
+────────────────────
+Canonical round-trip:
+    json_str = model.model_dump_json()
+    restored = Model.model_validate_json(json_str)
+    assert model == restored   ← compare instances, not dict to instance
+
+RULE: assert must compare two model instances.
+      dict == ModelInstance is ALWAYS False — different types.
+      Pydantic implements __eq__ by comparing field values
+      across model instances, not model to dict.
+
+
+FILE I/O PATTERNS
+──────────────────
+Write:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with open(path, "w") as f:
+            f.write(model.model_dump_json())
+    except OSError as e:
+        raise IOError(f"Could not write config: {e}") from e
+
+Read:
+    with open(path, "r") as f:
+        return Model.model_validate_json(f.read())
+
+KEY RULES:
+- Write mode is "w". Using "r" raises immediately on open().
+- model_dump_json() returns a str → write with "w", not "wb".
+- mkdir with exist_ok=True is idempotent — always safe to call.
+- try/except OSError belongs INSIDE the save function,
+  not only at the call site. Boundary design: the function
+  owns its infrastructure errors.
+
+
+BOUNDARY DESIGN (carried forward from Topic 6)
+───────────────────────────────────────────────
+Loaders raise on infrastructure failures (FileNotFoundError, IOError).
+Callers handle ValidationError.
+The loader is not the right place to catch ValidationError — it
+doesn't know what the caller wants to do with a bad config.
+
+
+GOTCHAS
+───────
+1. json.load(f) is a CALL.
+   json.load[f] is a subscript — TypeError at runtime.
+   This is silent until execution hits that line.
+
+2. PipelineConfig(**data) bypasses model_validate().
+   Use PipelineConfig.model_validate(data) for dict-shaped input.
+   **kwargs construction breaks if model_validate hooks are added later
+   and skips the intended validation entry point.
+
+3. Missing imports will pass a linter if Path is used only inside
+   a function body — the error is runtime-only, not caught statically
+   unless a type checker is configured.
+
+4. exclude_none + round-trip: if a model has required fields that
+   can hold None at runtime (e.g., via Optional with no default),
+   exclude_none will drop them from the dump, and re-validation will
+   fail or produce a different model. Round-trip asserts should be
+   tested against models with fully-populated fields OR the
+   exclude_none flag must be absent for safety-critical round-trips.
+
+
+RECURRING PATTERNS (multi-topic)
+──────────────────────────────────
+mode="after" validators ALWAYS require return self.
+   - Omitting return self returns None as the model instance.
+   - This has appeared in Topics 4, 6, and 7 warm-up.
+   - Check this first whenever a validator seems to silently no-op.
+
+model_validate idiom:
+   - model_validate(data) for dict input
+   - model_validate_json(s) for JSON string input
+   - Never: Model(**data) for external/untrusted input
+   - Never: json.loads(s) then model_validate()
+
+Regex patterns for pattern= constraints:
+   - Escape literal dots: r"\." not r"."
+   - Group alternations: r"\.(csv|jsonl)$" not r"\.csv$|\.jsonl$"
+   - (Established Topic 6; reinforced here)
+
+
+BUG LOG — TOPIC 7
+───────────────────
+Warm-up:
+  - Missing return self in mode="after" @model_validator
+    (third occurrence — Topics 4, 6, 7)
+  - Round-trip assert compared dict output to model instance
+    (always False regardless of content)
+
+Challenge:
+  - File opened in "r" mode instead of "w"
+  - json.load[f] subscript instead of json.load(f) call
+  - try/except OSError placed at call site only,
+    not inside save_config function
+
+Debugging:
+  - Missing `from pathlib import Path` import
+  - PipelineConfig(**data) instead of PipelineConfig.model_validate(data)
+  - (Initial claim of three bugs was incorrect — retracted after
+    runtime evidence; two confirmed bugs)
+
+
+EXERCISES WRITTEN
+──────────────────
+Warm-up:
+  serialize_config / deserialize_config for ExperimentConfig;
+  round-trip assert; exclude_defaults parameter demonstration.
+
+Challenge:
+  save_config (mkdir + write + OSError boundary)
+  load_config (read + model_validate_json)
+  diff_configs (compare two configs via model_dump dicts)
+  summarize_config (formatted summary string)
+
+Debugging:
+  PipelineConfig + AugmentationConfig export/restore pipeline —
+  two bugs: missing Path import; **kwargs construction vs model_validate.
+
+══════════════════════════════════════════════════════════════════

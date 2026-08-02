@@ -1,0 +1,9 @@
+{
+  "experiment_name": "sentiment_baseline",
+  "model_type": "transformer",
+  "learning_rate": 0.0003,
+  "batch_size": 32,
+  "epochs": 10,
+  "device": "cuda",
+  "tags": ["nlp", "baseline", "v1"]
+}

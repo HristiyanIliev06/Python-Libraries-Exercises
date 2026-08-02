@@ -1,0 +1,125 @@
+PYDANTIC V2 — TOPIC 6: NESTED MODELS
+Revision Report
+========================================
+
+NOTE: Exercise names are reconstructed approximations — actual session names may differ.
+      Bug log is confirmed from tracked session patterns.
+
+
+CORE PURPOSE
+------------
+Pydantic models compose by using one model as a field type in another. Validation
+is applied recursively — each inner model validates its own fields independently.
+This mirrors real-world hierarchical data (ML pipeline specs, API payloads, config
+files) and keeps validation logic co-located with the data it governs.
+
+
+SYNTAX
+------
+from pydantic import BaseModel, ValidationError
+from typing import Optional
+
+class DataConfig(BaseModel):
+    path: str
+    format: str
+    batch_size: int = 32
+
+class TrainingConfig(BaseModel):
+    epochs: int
+    learning_rate: float
+    optimizer: str = "adam"
+
+class LoggingConfig(BaseModel):
+    log_dir: str
+    verbose: bool = False
+
+class ExperimentConfig(BaseModel):
+    name: str
+    data: DataConfig
+    training: TrainingConfig
+    logging: Optional[LoggingConfig] = None
+
+# Parsing from raw nested dict (the common case)
+raw = {
+    "name": "run-01",
+    "data": {"path": "/data/train.csv", "format": "csv"},
+    "training": {"epochs": 10, "learning_rate": 0.001}
+}
+cfg = ExperimentConfig.model_validate(raw)
+
+# Serialisation
+cfg.model_dump()              # fully recursive → nested dicts
+cfg.model_dump_json()         # → JSON string, fully recursive
+
+# Selective exclusion in nested model
+cfg.model_dump(exclude={"data": {"path"}})   # exclude one nested field
+cfg.model_dump(exclude={"logging": True})    # exclude an entire nested model
+
+# Constructing with model instances (also valid)
+data = DataConfig(path="/data/train.csv", format="csv")
+ExperimentConfig(name="run-02", data=data, training={"epochs": 5, "learning_rate": 0.01})
+
+
+RULES
+-----
+1. Validation is recursive — a ValidationError in a nested model surfaces with
+   the full location path: e.g. loc=("data", "batch_size").
+2. model_dump() is recursive by default: nested models become nested plain dicts.
+3. model_validate(dict) constructs inner models automatically from nested dicts.
+4. Passing a nested model INSTANCE where a dict is expected also works — Pydantic
+   accepts both at the boundary.
+5. exclude= in model_dump() uses a nested dict to target specific nested fields:
+       exclude={"outer_field": {"inner_field"}}
+       exclude={"outer_field": True}   ← excludes the whole sub-model
+
+
+GOTCHAS
+-------
+! model_dump(exclude_none=True) does NOT always recurse correctly into deeply
+  nested Optional fields in all edge cases. Test with multi-level Optional nesting.
+
+! ValidationError location paths: access err["loc"] as a tuple of keys/indices.
+  For a deeply nested error, loc=("data", "batch_size") tells you exactly where
+  the failure occurred. Use this in error handling rather than re-raising blindly.
+
+! Circular references between models are not supported by default — they cause
+  RecursionError at model creation time.
+
+! A common structural error: passing a flat dict when the model expects a nested
+  one. E.g. passing {"path": ..., "epochs": ...} to ExperimentConfig directly
+  instead of nesting under "data" and "training" keys.
+
+! Updating nested model fields: models are immutable by default (model_config
+  can allow mutation). Use model_copy(update={"field": new_value}) for safe updates.
+
+
+PATTERNS
+--------
+- Decompose large flat configs into nested sub-models by logical domain:
+  DataConfig, TrainingConfig, LoggingConfig — each owns its own validation.
+- Use model_validate at the TOP-LEVEL model only — it recurses automatically.
+- Inspect nested ValidationError locations:
+      for err in e.errors():
+          print(err["loc"], err["msg"])
+- Use model_dump(mode="json") for JSON-safe output (handles datetime, etc.).
+- Nested model fields can still carry their own @field_validator and @model_validator.
+  Each model's validators run during its own instantiation — composing naturally.
+
+
+WHEN TO USE / NOT USE
+---------------------
+Use nested models when a group of related fields belongs together conceptually and
+may be validated or reused independently. Don't flatten everything into one giant
+model — validators and serialisation become harder to manage.
+Don't create nesting for its own sake — two related fields don't need a sub-model
+unless they have their own validation logic or are reused elsewhere.
+
+
+EXERCISES WRITTEN (reconstructed)
+----------------------------------
+1. Warm-up: ExperimentConfig — three-level nesting (data, training, logging);
+   model_dump() inspection; access ValidationError location paths.
+2. Challenge: FullPipelineSpec — deep nesting with field validators at multiple
+   levels, model_validate from a raw nested dict, selective model_dump exclusion.
+3. Debugging: Fix a broken nested config — missing required nested field, wrong
+   dict structure passed to sub-model, incorrect exclude= dict syntax.

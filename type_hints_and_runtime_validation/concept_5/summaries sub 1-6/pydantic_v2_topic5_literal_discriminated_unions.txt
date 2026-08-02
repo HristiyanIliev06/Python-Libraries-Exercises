@@ -1,0 +1,122 @@
+PYDANTIC V2 — TOPIC 5: LITERAL TYPES AND DISCRIMINATED UNIONS
+Revision Report
+==============================================================
+
+NOTE: Exercise names are reconstructed approximations — actual session names may differ.
+      Bug log is confirmed from tracked session patterns.
+
+
+CORE PURPOSE
+------------
+Literal pins a field to a finite, exact set of values at parse time. Discriminated
+unions let Pydantic select the correct submodel from a Union by inspecting one
+discriminator field, enabling clean polymorphic schemas without ambiguity or
+try-each-branch brute force.
+
+
+SYNTAX
+------
+from pydantic import BaseModel, Field
+from typing import Literal, Union, Annotated
+
+# 1. Simple Literal field
+class OptimizerConfig(BaseModel):
+    optimizer: Literal["adam", "sgd", "rmsprop"]
+    learning_rate: float
+
+# 2. Discriminated union — each branch declares its own Literal tag
+class LinearModel(BaseModel):
+    kind: Literal["linear"]
+    learning_rate: float
+
+class TreeModel(BaseModel):
+    kind: Literal["tree"]
+    max_depth: int
+
+class NeuralNetModel(BaseModel):
+    kind: Literal["nn"]
+    hidden_layers: int
+    dropout: float
+
+# 3. Compose the union with a discriminator
+ModelSpec = Annotated[
+    Union[LinearModel, TreeModel, NeuralNetModel],
+    Field(discriminator="kind")
+]
+
+class ExperimentConfig(BaseModel):
+    name: str
+    model: ModelSpec
+
+# Usage
+cfg = ExperimentConfig.model_validate({
+    "name": "run-01",
+    "model": {"kind": "tree", "max_depth": 5}
+})
+# cfg.model is a TreeModel — fully validated, fully typed
+
+
+RULES
+-----
+1. Literal["a", "b"] accepts ONLY those exact values — no coercion.
+2. All branches in a discriminated union must share the SAME discriminator field name.
+3. Each branch's discriminator field must be typed as a unique Literal value.
+4. Pydantic uses the discriminator value to select the branch BEFORE parsing —
+   it never tries all branches.
+5. If the discriminator field is absent from input, ValidationError is raised.
+6. The Annotated[Union[...], Field(discriminator="field")] syntax is the v2 way.
+   The older Union[A, B] with model_config discriminator is also supported.
+
+
+GOTCHAS
+-------
+! Literal values are case-sensitive: Literal["Linear"] will NOT match "linear".
+  Normalize input before validation if case is uncertain.
+
+! Plain Union without a discriminator forces Pydantic to try branches in order.
+  This is slow and fragile — the first branch that partially validates may match
+  incorrectly. Always prefer discriminated unions for structured alternatives.
+
+! Missing discriminator field in input raises a specific error at the union level,
+  not at the branch level. The error message names the missing discriminator key.
+
+! isinstance checks against a discriminated union type alias require checking
+  the specific submodel class, not the alias:
+      isinstance(cfg.model, TreeModel)  ← correct
+      isinstance(cfg.model, ModelSpec)  ← wrong / doesn't work
+
+! TypeAlias (Python 3.10+) or simple assignment works fine for naming the union:
+      ModelSpec = Annotated[Union[...], Field(discriminator="kind")]
+  This is just for readability — it has no runtime effect.
+
+
+PATTERNS
+--------
+- Literal as a "type tag": define kind: Literal["linear"] in each branch.
+  This is the standard discriminated union pattern.
+- Use model_validate(dict) to parse JSON payloads containing mixed model types.
+- Nest discriminated unions: a field of type ModelSpec can itself contain a union.
+- For validation-time enum-like checks on a plain field, Literal is simpler than
+  creating a full Enum class.
+- Export union type as a TypeAlias for reuse across multiple models.
+
+
+WHEN TO USE / NOT USE
+---------------------
+Use Literal when a field must be exactly one of a small, fixed set of values.
+Use discriminated unions when input data has a type tag that determines the full
+shape of the remaining fields.
+Do NOT use plain Union for structured alternatives — discriminated unions are faster,
+clearer, and produce better error messages.
+Do NOT use Literal for open-ended sets — use Enum or a validator instead.
+
+
+EXERCISES WRITTEN (reconstructed)
+----------------------------------
+1. Warm-up: OptimizerConfig — Literal field for optimizer name; validate against
+   the allowed set, inspect ValidationError on unknown value.
+2. Challenge: MLComponentSpec — discriminated union over LinearModel, TreeModel,
+   NeuralNetModel with shared "kind" discriminator; parse heterogeneous list of configs.
+3. Debugging: Fix a broken discriminated union — missing Literal on a branch's
+   discriminator field, case mismatch between input and Literal, wrong Union annotation
+   syntax (non-discriminated).

@@ -1,0 +1,94 @@
+PYDANTIC V2 — TOPIC 1: BASEMODEL FUNDAMENTALS
+Revision Report
+===============================================
+
+NOTE: Exercise names are reconstructed approximations — actual session names may differ.
+      Bug log is confirmed from tracked session patterns.
+
+
+CORE PURPOSE
+------------
+BaseModel is Pydantic's central class. Subclass it to define a typed schema.
+On instantiation, Pydantic parses every field against its annotation and raises
+ValidationError on failure. It is the boundary enforcement layer: data that passes
+a model is trustworthy for the rest of the pipeline.
+
+
+SYNTAX
+------
+from pydantic import BaseModel, ValidationError
+from typing import Optional
+
+class SensorReading(BaseModel):
+    sensor_id: str
+    value: float
+    unit: str
+    active: bool = True
+    label: Optional[str] = None          # requires explicit default in v2
+
+reading = SensorReading(sensor_id="s01", value=23.5, unit="C")
+reading.model_dump()             # → plain dict
+reading.model_dump_json()        # → JSON string
+reading.model_fields             # → dict of FieldInfo per field
+reading.model_fields_set         # → set of fields explicitly provided by caller
+
+try:
+    SensorReading(sensor_id=None, value="bad", unit="C")
+except ValidationError as e:
+    for err in e.errors():
+        print(err["loc"], err["msg"], err["type"])
+
+
+RULES
+-----
+1. Required fields: any field with an annotation and NO default must be supplied.
+2. Type coercion is on by default: "3" → 3 for int fields.
+3. ValidationError collects ALL field errors before raising — not just the first.
+4. Extra fields passed at instantiation are silently ignored (default behaviour).
+   Control with model_config = ConfigDict(extra="forbid") or "allow".
+5. model_dump() returns a plain dict; nested models are also converted to dicts.
+6. Fields with Optional[T] = None are omittable; model_dump(exclude_none=True) strips them.
+
+
+GOTCHAS
+-------
+! Optional[str] WITHOUT a default is STILL REQUIRED in Pydantic v2.
+  Optional[T] means "the value may be None", NOT "this field has a default of None".
+  You must write:  label: Optional[str] = None
+  This was the main v1 → v2 breaking change for Optional fields.
+
+! model_dump() is the v2 replacement for .dict() — do not use .dict() in v2 code.
+
+! model_json_schema() replaced .schema() from v1.
+
+! ValidationError is from pydantic, not from Python builtins. Don't conflate with
+  ValueError — they serve different roles (see Topic 3).
+
+
+PATTERNS
+--------
+- Use model_fields_set to detect which fields the caller actually supplied vs defaulted.
+- Use model_dump(exclude_none=True) to produce clean API payloads.
+- Use model_dump(exclude={"internal_field"}) to strip internal-only fields from output.
+- Catching ValidationError:
+      e.errors()             → list of dicts (loc, msg, type, input)
+      e.error_count()        → int
+- Use model_validate(dict) as the named constructor for dicts (clearer than **unpacking).
+
+
+WHEN TO USE / NOT USE
+---------------------
+Use BaseModel when data crosses a system boundary: API requests, file ingestion,
+user input, inter-service messages. The model IS the contract.
+Do not use plain Python dataclasses when boundary-level validation is required.
+Do not instantiate BaseModel directly — always subclass it.
+
+
+EXERCISES WRITTEN (reconstructed)
+----------------------------------
+1. Warm-up: SensorReading model — define mixed-type fields, required vs default,
+   instantiate, call model_dump(), catch and inspect ValidationError.
+2. Challenge: MLPipelineConfig — multi-field model with nested Optional fields,
+   mixed required/default, programmatic error introspection across multiple bad inputs.
+3. Debugging: Fix a broken model — Optional fields missing defaults, wrong field types,
+   ValidationError misuse (raised directly instead of caught).

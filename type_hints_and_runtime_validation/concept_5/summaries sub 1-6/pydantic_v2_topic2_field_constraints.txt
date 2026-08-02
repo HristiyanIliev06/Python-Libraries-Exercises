@@ -1,0 +1,107 @@
+PYDANTIC V2 — TOPIC 2: FIELD() CONSTRAINTS
+Revision Report
+============================================
+
+NOTE: Exercise names are reconstructed approximations — actual session names may differ.
+      Bug log is confirmed from tracked session patterns.
+
+
+CORE PURPOSE
+------------
+Field() wraps a field definition with constraints, metadata, and behaviour beyond
+what a type annotation alone can express. Constraints are enforced at parse time;
+violations raise ValidationError with field-specific messages. It is the right tool
+for numeric ranges, string patterns, aliases, and mutable defaults.
+
+
+SYNTAX
+------
+from pydantic import BaseModel, Field
+from typing import Optional
+
+class ModelHyperparams(BaseModel):
+    name: str = Field(min_length=1, max_length=64)
+    learning_rate: float = Field(gt=0.0, lt=1.0)
+    batch_size: int = Field(ge=1, le=512, default=32)
+    description: Optional[str] = Field(default=None, description="Human-readable label")
+    tags: list[str] = Field(default_factory=list)
+    model_id: str = Field(alias="modelId")
+
+# Serialising with aliases:
+cfg = ModelHyperparams.model_validate({"name": "resnet", "learning_rate": 0.01, "modelId": "m1"})
+cfg.model_dump()                    # → uses Python field names (model_id)
+cfg.model_dump(by_alias=True)       # → uses alias keys (modelId)
+
+
+RULES
+-----
+Numeric bounds:
+  gt  → strictly greater than
+  ge  → greater than or equal to
+  lt  → strictly less than
+  le  → less than or equal to
+
+String / collection bounds:
+  min_length / max_length → applies to str, bytes, list, set, tuple
+
+Pattern:
+  pattern="^[a-z_]+$"  → regex, strings only, full-match semantics in v2
+
+Defaults:
+  default=value        → for immutable values (int, str, None, etc.)
+  default_factory=fn   → for mutable values (list, dict, set); takes a CALLABLE
+  Never write default_factory=list()  — that evaluates list() immediately.
+
+Alias:
+  alias="externalKey"  → accept this key from raw input
+  Use model_validate(by_alias=True) or model_dump(by_alias=True) to toggle alias mode.
+
+
+GOTCHAS
+-------
+! Floating-point modulo is wrong for power-of-2 checks.
+  64.0 % 2 works accidentally, but non-integer floats produce wrong results.
+  Correct approach:
+      if not (isinstance(v, int) and v > 0 and (v & (v - 1)) == 0):
+          raise ValueError(...)
+  Bitwise AND is the canonical power-of-2 test.
+
+! default_factory takes a CALLABLE, not a value:
+      tags: list[str] = Field(default_factory=list)     ← correct
+      tags: list[str] = Field(default_factory=list())   ← wrong — evaluates now
+
+! alias only affects INPUT parsing by default. model_dump() returns Python field
+  names unless you pass by_alias=True.
+
+! Constraints compose with the type annotation. int with ge=0 rejects both
+  negative ints AND floats (floats fail the int type check first).
+
+! pattern in v2 uses re.fullmatch semantics — it must match the entire string.
+  In v1 it used re.search. Anchors (^ and $) are no longer needed but still work.
+
+
+PATTERNS
+--------
+- Use description= and title= for auto-generated JSON Schema and API docs.
+- Combine pattern with min_length to prevent empty-string matches via regex.
+- Prefer ge/le over gt/lt when boundary values are themselves valid.
+- Use Field(alias=...) for camelCase ↔ snake_case translation at API boundaries.
+- For complex default logic, use default_factory with a lambda:
+      Field(default_factory=lambda: {"key": "value"})
+
+
+WHEN TO USE / NOT USE
+---------------------
+Use Field() whenever the type annotation alone is insufficient: numeric ranges,
+string patterns, mutable defaults, aliases, or metadata for schema generation.
+Don't reach for a @field_validator just to check a numeric bound — Field() handles it.
+
+
+EXERCISES WRITTEN (reconstructed)
+----------------------------------
+1. Warm-up: ModelHyperparams — learning rate, batch size, dropout rate with
+   numeric constraints; instantiate valid and invalid configs.
+2. Challenge: DataPipelineConfig — combined constraints, aliases, default_factory,
+   power-of-2 validation embedded in Field() pattern.
+3. Debugging: Fix a broken config model — wrong default_factory usage (called not
+   passed), floating-point modulo for power-of-2 check, alias serialisation error.

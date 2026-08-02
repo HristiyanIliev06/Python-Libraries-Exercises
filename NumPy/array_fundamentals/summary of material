@@ -1,0 +1,118 @@
+=============================================================
+NUMPY TOPIC 1 — ARRAY FUNDAMENTALS
+Revision Report
+=============================================================
+
+CORE PURPOSE
+------------
+NumPy arrays are homogeneously typed, contiguous blocks of memory.
+They are the foundation beneath PyTorch tensors, pandas DataFrames,
+and scikit-learn feature matrices. Understanding creation, shape,
+dtype, and memory layout is prerequisite to everything else.
+
+KEY SYNTAX
+----------
+np.array([...])                          # from Python data
+np.arange(start, stop, step)            # sequence by step size
+np.linspace(start, stop, n)             # n points, inclusive
+np.zeros((rows, cols), dtype=...)       # constant fill: 0
+np.ones((rows, cols), dtype=...)        # constant fill: 1
+np.full(shape, fill_value, dtype=...)   # constant fill: any value
+np.concatenate([a, b])                  # join arrays along axis 0
+
+a.shape     # tuple — (rows, cols, ...)
+a.ndim      # number of axes
+a.dtype     # element type
+a.size      # total element count
+a.nbytes    # total bytes = size × itemsize
+a.itemsize  # bytes per single element
+
+a.reshape(r, c)     # new shape, same data
+a.reshape(-1, c)    # infer one dimension automatically
+a.astype(dtype)     # convert dtype, returns new array
+
+RULES
+-----
+- shape argument to zeros/ones/full must be a TUPLE: (r, c), not r, c
+- np.arange(start, stop, step): third arg is STEP, not count
+- .astype() is the only correct way to convert dtype
+- .dtype = np.float32 reinterprets raw bytes — corrupts data, never use
+- dtype string ("float32") and np.float32 are both valid in creation fns
+- np.full infers dtype from fill_value — always pass dtype= explicitly
+
+GOTCHAS
+-------
+1. np.arange argument order
+   np.arange(0, 2, 50) → [0]  (step=50, only one value fits)
+   np.arange(0, 50, 2) → [0, 2, 4, ..., 48]
+   When in doubt: name the args — np.arange(start=0, stop=50, step=2)
+
+2. Direct dtype assignment corrupts data
+   a.dtype = np.float32   ← NEVER DO THIS
+   a.astype(np.float32)   ← always use this
+
+3. np.full dtype inference
+   np.full(shape, -1)              → int64 (inferred from int literal)
+   np.full(shape, -1, dtype=np.float32) → float32 (explicit, correct)
+   Mismatch with a float32 array causes silent type disagreement downstream
+
+4. Shape (3,) ≠ shape (3, 1) ≠ shape (1, 3)
+   1D vs 2D distinction is critical for broadcasting later
+
+5. np.arange default dtype
+   np.arange(24)       → int64 (nbytes = 24 × 8 = 192)
+   np.arange(24.0)     → float64 (also 8 bytes/element)
+   np.arange(24, dtype=np.float32) → float32 (4 bytes/element)
+
+PATTERNS
+--------
+- Alternating binary labels:  np.arange(n) % 2
+- Two-class label array:      np.concatenate([np.zeros(n//2, dtype=int),
+                                              np.ones(n//2, dtype=int)])
+- Flatten to column vector:   x.reshape(-1, 1)
+- Flatten feature map:        x.reshape(batch_size, -1)
+- Memory comparison:          print(X.nbytes, X.astype(np.float32).nbytes)
+
+WHEN TO USE EACH CREATION FUNCTION
+-----------------------------------
+np.array()     → you have data in hand (list, nested list)
+np.arange()    → you know the step size
+np.linspace()  → you know how many points you need
+np.zeros()     → initializing weights, masks, output buffers
+np.ones()      → bias vectors, multiplicative identity
+np.full()      → sentinel values, non-zero/one constants
+
+MEMORY
+------
+nbytes = size × itemsize
+float64 → 8 bytes/element (NumPy default)
+float32 → 4 bytes/element (GPU training standard)
+int64   → 8 bytes/element
+int32   → 4 bytes/element
+bool    → 1 byte/element
+
+EXERCISES COMPLETED
+-------------------
+Warm-up:
+  A. Create weight matrix (8,4) float32 zeros, bias (8,) float32 ones,
+     6 linspace learning rate candidates
+  B. Reshape arange(24) to (2,3,4), inspect attributes, explain nbytes
+
+Challenge:
+  - Reshape 1000-element float64 array to (200, 5)
+  - Create float32 sentinel placeholder of same shape
+  - Build integer label array (100×0, 100×1) without loops
+  - Compare float64 vs float32 memory footprint and ratio
+
+Debugging:
+  Bugs found and fixed:
+  1. np.zeros(n, m) → np.zeros((n, m))       shape must be a tuple
+  2. np.arange(0, 2, n_samples) →             wrong arg order (step=50)
+     np.arange(n_samples) % 2
+  3. np.full(X.shape, -1) →                  dtype not explicit
+     np.full(X.shape, -1, dtype=np.float32)
+  4. assert X.shape == labels.shape →         wrong condition (different ndim)
+     assert labels.shape[0] == X.shape[0]
+  5. X.astype(np.float16) — already correct, no bug
+
+=============================================================

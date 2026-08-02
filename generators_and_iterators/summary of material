@@ -1,0 +1,249 @@
+================================================================================
+TOPIC 1 REPORT — GENERATORS AND ITERATORS
+================================================================================
+
+CORE PURPOSE
+------------
+Enable lazy, memory-efficient data processing. Instead of loading entire
+datasets into memory, generators produce values one at a time on demand —
+the foundation of every production ML data pipeline.
+
+--------------------------------------------------------------------------------
+
+KEY CONCEPTS
+------------
+
+YIELD
+  - Turns a function into a generator function
+  - Calling a generator function returns a generator object — nothing executes yet
+  - Execution pauses at yield, hands the value to the caller, resumes on next()
+  - Local state (variables, file handles, position) is frozen between yields
+
+LAZY EVALUATION
+  - Nothing executes until something pulls from the iterator
+  - The entire pipeline fires on demand, one item at a time, all the way to source
+  - Enables processing of datasets too large to fit in memory
+
+THE ITERATOR PROTOCOL
+  - __iter__ — returns the iterator object (often self)
+  - __next__ — returns the next value, raises StopIteration when exhausted
+  - Any object implementing both is an iterator
+  - Any object implementing only __iter__ is an iterable
+
+ITERABLE VS ITERATOR
+  - Iterable: has __iter__, returns an iterator when called
+  - Iterator: has both __iter__ and __next__, holds iteration state
+  - Lists, dicts, files are iterables — not iterators
+  - Generators are iterators — they hold their own state
+  - Making __iter__ a generator (with yield inside it) makes a class
+    iterable-but-not-iterator — safe to loop over multiple times,
+    each loop gets a fresh independent generator
+
+GENERATOR EXPRESSIONS
+  - Lazy equivalent of list comprehensions
+  - (expr for item in iterable if condition)
+  - Can be chained — each stage wraps the previous lazily
+  - Nothing materialises until something iterates the final expression
+
+--------------------------------------------------------------------------------
+
+THE THREE PIPELINE PRIMITIVES
+------------------------------
+  map    — transform each element. One item in, one item out.
+  filter — keep or discard each element. One item in, zero or one items out.
+  reduce — collapse many elements into one. Many items in, one item out.
+           (batch() is a mild form of reduce)
+
+--------------------------------------------------------------------------------
+
+CRITICAL RULES AND GOTCHAS
+---------------------------
+
+BOUNDARY CONDITIONS
+  - Use >= not > and not == for iterator stop checks
+  - > allows one extra iteration — causes IndexError on final step
+  - == is brittle — breaks if index ever overshoots (e.g. subclass behaviour)
+  - >= is defensive and correct in all cases
+
+.extend() VS .append() — DATA SHAPE
+  - .extend() unpacks an iterable — many items added per step
+    → accumulator can overshoot batch_size in one step
+    → requires >= boundary check and slice-and-carry overflow logic
+  - .append() adds one item per step — accumulator grows by exactly 1
+    → == boundary check is safe, no overflow possible
+  - This is not a style choice — it determines the shape of your output data
+    and is a real source of dimension errors in ML pipelines
+
+MUTATION HAZARD
+  - random.shuffle() mutates in place — always shuffle a copy, not self.files
+  - Yielding a list and then clearing it gives the caller an empty list —
+    yield a slice (batch[:n]) to give the caller an independent copy
+
+IMPORT PLACEMENT
+  - Imports inside methods hide dependencies and are not idiomatic
+  - Always import at the top of the file
+
+RETURN INSIDE A GENERATOR
+  - return inside a generator raises StopIteration implicitly
+  - The clean way to stop early (e.g. when max_tokens is hit)
+
+TWO-LEVEL STRUCTURE IN PIPELINE METHODS
+  - A method that returns Pipeline(generator(self.iterator)) has two levels:
+    Level 1 — method call: executes immediately, builds the chain
+    Level 2 — inner generator: executes lazily, only when iterated
+  - If the method itself contains yield, it returns a generator not a Pipeline
+    and the chain breaks — .map()/.filter() become unavailable downstream
+
+BATCH SPANNING FILE BOUNDARIES
+  - Initialise batch outside the file loop, not inside
+  - Initialising inside resets the batch per file — produces short final
+    batches at every file boundary, which is wrong for corpus pipelines
+
+RESET() HAZARD
+  - A reset() method on an iterator that also resets in __iter__ is redundant
+  - Worse — calling reset() mid-iteration produces unpredictable repeated items
+  - If you need a resettable data source, make it an iterable-not-iterator
+    (yield inside __iter__) so each loop gets a fresh independent generator
+
+--------------------------------------------------------------------------------
+
+PATTERNS
+--------
+
+STANDALONE GENERATOR FUNCTION — simple, self-contained, owns its data source
+  def token_batches(filepath, batch_size):
+      with open(filepath) as f:
+          batch = []
+          for line in f:
+              tokens = line.strip().split()
+              if not tokens:
+                  continue
+              batch.extend(tokens)
+              if len(batch) >= batch_size:
+                  yield batch[:batch_size]
+                  batch = batch[batch_size:]
+          if batch:
+              yield batch
+
+CLASS-BASED ITERABLE — reusable, separates config from iteration state
+  class DatasetIterable:
+      def __init__(self, samples):
+          self.samples = samples
+
+      def __iter__(self):
+          for sample in self.samples:
+              yield sample
+
+CLASS-BASED ITERATOR — holds state, single-pass only
+  class DatasetIterator:
+      def __init__(self, samples):
+          self.samples = samples
+          self.index = 0
+
+      def __iter__(self):
+          self.index = 0
+          return self
+
+      def __next__(self):
+          if self.index >= len(self.samples):
+              raise StopIteration
+          sample = self.samples[self.index]
+          self.index += 1
+          return sample
+
+CHAINABLE LAZY PIPELINE
+  class Pipeline:
+      def __init__(self, iterator):
+          self.iterator = iterator
+
+      def map(self, func):
+          return Pipeline(map(func, self.iterator))
+
+      def filter(self, pred):
+          return Pipeline(filter(pred, self.iterator))
+
+      def batch(self, n):
+          def _batcher(it):
+              current = []
+              for item in it:
+                  current.append(item)
+                  if len(current) == n:
+                      yield current
+                      current = []
+              if current:
+                  yield current
+          return Pipeline(_batcher(self.iterator))
+
+      def __iter__(self):
+          return iter(self.iterator)
+
+DIRECTORY-BASED CORPUS PIPELINE (Project 1 pattern)
+  from pathlib import Path
+  import random
+
+  class Pipeline:
+      def __init__(self, directory, batch_size, max_tokens=None, shuffle=False):
+          self.files = sorted(Path(directory).glob("*.txt"))
+          self.batch_size = batch_size
+          self.max_tokens = max_tokens
+          self.shuffle = shuffle
+
+      def _get_files(self):
+          files = list(self.files)
+          if self.shuffle:
+              random.shuffle(files)
+          return files
+
+      def __iter__(self):
+          token_counter = 0
+          batch = []
+          for file in self._get_files():
+              with open(file) as f:
+                  for line in f:
+                      tokens = line.strip().split()
+                      if not tokens:
+                          continue
+                      if self.max_tokens is not None:
+                          remaining = self.max_tokens - token_counter
+                          tokens = tokens[:remaining]
+                      token_counter += len(tokens)
+                      batch.extend(tokens)
+                      while len(batch) >= self.batch_size:
+                          yield batch[:self.batch_size]
+                          batch = batch[self.batch_size:]
+                      if self.max_tokens and token_counter >= self.max_tokens:
+                          if batch:
+                              yield batch
+                          return
+          if batch:
+              yield batch
+
+--------------------------------------------------------------------------------
+
+WHEN TO USE GENERATORS
+-----------------------
+  USE when:
+  - Data is too large to fit in memory
+  - You only need one item at a time (training loops, streaming inference)
+  - You want composable, chainable pipeline stages
+  - You need to read from disk, network, or any sequential source
+
+  AVOID when:
+  - You need random access (index into position 500 arbitrarily)
+  - You need to iterate multiple times cheaply without re-generating
+  - The dataset is small enough that materialising it is fine and
+    simpler code is worth more than memory savings
+
+--------------------------------------------------------------------------------
+
+EXERCISES WRITTEN
+-----------------
+  Warm-up  : token_batches(filepath, batch_size) — lazy file tokeniser
+  Challenge: Pipeline class with .map(), .filter(), .batch() — chainable
+  Debugging: DatasetIterator — boundary condition bug, redundant reset()
+  Project 1: Full corpus pipeline — directory input, batch_size, max_tokens,
+             shuffle, lazy, reusable, spanning file boundaries
+
+================================================================================
+END OF TOPIC 1 REPORT
+================================================================================

@@ -1,0 +1,116 @@
+PYDANTIC V2 — TOPIC 3: FIELD VALIDATORS (@field_validator)
+Revision Report
+============================================================
+
+NOTE: Exercise names are reconstructed approximations — actual session names may differ.
+      Bug log is confirmed from tracked session patterns.
+
+
+CORE PURPOSE
+------------
+@field_validator attaches custom validation logic to individual fields. It runs after
+type coercion and Field() constraints. Use it when the constraint cannot be expressed
+as a simple bound — business rules, cross-value normalization, format enforcement.
+
+
+SYNTAX
+------
+from pydantic import BaseModel, field_validator
+
+class TrainingConfig(BaseModel):
+    split_ratio: float
+    optimizer: str
+    vocab_size: int
+
+    @field_validator("split_ratio")
+    @classmethod
+    def check_ratio(cls, v: float) -> float:
+        if not 0.0 < v < 1.0:
+            raise ValueError("split_ratio must be strictly between 0 and 1")
+        return v
+
+    @field_validator("optimizer")
+    @classmethod
+    def normalize_optimizer(cls, v: str) -> str:
+        return v.strip().lower()
+
+    @field_validator("split_ratio", "vocab_size")   # multiple fields, one decorator
+    @classmethod
+    def must_be_positive(cls, v: float | int) -> float | int:
+        if v <= 0:
+            raise ValueError("must be positive")
+        return v
+
+    # mode="before": runs BEFORE type coercion — receives raw input
+    @field_validator("vocab_size", mode="before")
+    @classmethod
+    def coerce_vocab(cls, v: object) -> object:
+        if isinstance(v, str):
+            return int(v.replace(",", ""))  # "10,000" → 10000
+        return v
+
+
+RULES
+-----
+1. @field_validator ALWAYS requires @classmethod. No exceptions.
+   Signature: cls as first arg, v as second (the field value).
+2. Raise ValueError (or AssertionError) inside validators.
+   NEVER raise ValidationError directly — Pydantic wraps your ValueError.
+3. The validator MUST return the value. Returning None silently sets field to None.
+4. Execution order (default mode, i.e. mode="after"):
+     type coercion → Field() constraints → @field_validator
+5. mode="before": runs before type coercion; v is the raw, untyped input.
+6. Multiple fields in one decorator: each field is validated independently by the same function.
+7. Validators can TRANSFORM values (normalization) — not just validate them.
+
+
+GOTCHAS
+-------
+! Missing @classmethod:
+  Raises TypeError at class definition time (not at validation time). The error
+  message is cryptic if you're not watching for it. @classmethod is MANDATORY.
+
+! Raising ValidationError inside a validator:
+  Pydantic catches your validator's output and wraps it. If you raise ValidationError
+  directly, Pydantic wraps it again, producing a nested/malformed error structure.
+  Always raise ValueError or AssertionError.
+
+! Returning None from a validator:
+  No error. The field silently becomes None regardless of its type annotation.
+  This is one of the hardest bugs to detect without an explicit test.
+
+! mode="before" vs. mode="after" (for @field_validator):
+  mode="after" (default): v is already coerced to the declared type.
+  mode="before": v is raw input — could be anything; handle defensively.
+  Both modes require @classmethod.
+
+! @field_validator runs per-field. For logic that needs two fields together,
+  use @model_validator instead.
+
+
+PATTERNS
+--------
+- Normalization pattern: strip + lower/upper is idiomatic in field validators.
+      return v.strip().lower()
+- Use mode="before" to clean messy string input before type coercion hits it.
+- Stack multiple validators on the same field in definition order.
+- For enum-like guards: raise ValueError(f"must be one of {VALID_OPTIONS}, got {v!r}")
+- Use cls to access class-level constants or other methods inside validators.
+
+
+WHEN TO USE / NOT USE
+---------------------
+Use @field_validator for single-field rules that Field() can't express: business logic,
+normalization, format enforcement.
+Do NOT use it when the rule involves comparing two or more fields — that's @model_validator.
+Do NOT replace Field(ge=0) with a validator just to check a numeric bound.
+
+
+EXERCISES WRITTEN (reconstructed)
+----------------------------------
+1. Warm-up: TrainingConfig — validate learning rate range, normalize optimizer name
+   to lowercase, reject empty string labels.
+2. Challenge: FeatureEngineeringConfig — multi-field validators, normalization,
+   regex-pattern guard, mode="before" usage on string→int coercion.
+3. Debugging: Fix a broken validator set — missing @classmethod, raised ValidationError
+   directly, missing return value (silent None bug).
