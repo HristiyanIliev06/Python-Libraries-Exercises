@@ -1,0 +1,188 @@
+══════════════════════════════════════════════════════════════════
+PYDANTIC V2 — TOPIC 8: SETTINGS MANAGEMENT WITH BASESETTINGS
+Revision Report
+══════════════════════════════════════════════════════════════════
+
+CORE PURPOSE
+────────────
+Manage environment-level configuration — API keys, endpoints,
+resource limits, deployment targets — using the same validation
+machinery as BaseModel, but sourcing values from environment
+variables and .env files instead of explicit arguments.
+
+
+BASESETTINGS VS BASEMODEL
+──────────────────────────
+BaseModel:    data comes from dicts / kwargs at construction time
+BaseSettings: data comes from env vars → .env file → defaults
+              (explicit kwargs at instantiation override all)
+
+Field priority (highest to lowest):
+  1. Kwargs passed directly at instantiation
+  2. Environment variables (os.environ)
+  3. .env file values
+  4. Field defaults
+
+Use BaseModel for structured data that travels through your
+system (experiment configs, request payloads, nested sub-models).
+Use BaseSettings for deployment config that changes per environment.
+
+
+CONFIGURATION
+─────────────
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+class MLSettings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+    )
+    database_url: str
+    workers: int = 4
+
+case_sensitive=False: Python field name → env var name mapping
+is automatic. `database_url` maps to `DATABASE_URL` without
+needing explicit alias on every field.
+
+Use alias= only when the env var name differs from the field name.
+Putting alias= on every field when names already correspond is
+redundant and signals a misunderstanding of how BaseSettings works.
+
+
+NESTED MODELS IN BASESETTINGS
+───────────────────────────────
+Nested BaseModel fields receive a JSON string from the environment:
+
+  STORAGE='{"bucket_name": "ml-data", "credentials_path": "/creds"}'
+
+Pydantic automatically parses the JSON string and validates it
+against the nested model. No manual json.loads() required.
+This is BaseSettings-specific behavior — BaseModel does not do
+this automatically for string input.
+
+
+INSTANTIATION
+─────────────
+BaseSettings is instantiated via __init__, not model_validate:
+
+  settings = MLSettings()                          # reads env + .env
+  settings = MLSettings(workers=8)                 # override one field
+
+model_validate is a BaseModel method for dict input. It works
+incidentally on BaseSettings but bypasses the full resolution
+stack — env vars, .env file, and the priority chain are skipped.
+Never use model_validate with BaseSettings.
+
+
+ENV VAR INJECTION PATTERN
+──────────────────────────
+Correct pattern for injecting env vars programmatically
+with guaranteed cleanup:
+
+  def get_settings(overrides: dict | None = None) -> MLSettings:
+      injected = []
+      if overrides is not None:
+          for key, value in overrides.items():
+              if value is not None:
+                  os.environ[key.upper()] = str(value)
+                  injected.append(key.upper())
+      try:
+          return MLSettings()
+      finally:
+          for key in injected:
+              os.environ.pop(key, None)
+
+KEY RULES:
+- Use a dedicated list to track injected keys.
+  Do NOT use os.environ.keys() for cleanup — that would
+  delete pre-existing env vars (PATH, HOME, PYTHONPATH, etc.).
+- Use try/finally, not try/except — finally runs on both
+  success and failure. Cleanup must be guaranteed.
+- os.environ.clear() destroys the entire process environment.
+  Never use it for scoped cleanup.
+- Skip None values when injecting: str(None) writes the literal
+  string "None" to os.environ, not Python None. BaseSettings
+  would receive "None" as a non-empty string for str | None fields.
+- key.upper(): os.environ is case-sensitive on Linux. Environment
+  variables are conventionally uppercase. Uppercase on injection
+  matches the convention and avoids silent lookup misses.
+
+
+CROSS-FIELD VALIDATION
+───────────────────────
+Same as BaseModel — use @model_validator(mode="after").
+Access nested model fields via self.nested_model.field.
+
+  @model_validator(mode="after")
+  def validate_env_constraints(self):
+      if self.deployment_env == "production":
+          if self.resources.max_memory_gb < 16:
+              raise ValueError("Production requires at least 16GB memory")
+      return self   ← always required
+
+Sub-models are already validated instances by the time
+mode="after" runs — bottom-up validation order applies here
+exactly as in nested BaseModel composition.
+
+
+GOTCHAS
+───────
+1. Missing return self in mode="after" validators.
+   - Now a four-topic recurring regression (Topics 4, 6, 7, 8).
+   - Check this first when a validator silently no-ops on valid input.
+
+2. No try/finally in factory functions.
+   - Cleanup that only runs on success leaves injected keys
+     in os.environ on failure — state leaks across calls.
+
+3. alias= on every field when case_sensitive=False is set.
+   - Redundant and misleading. Use alias= only when the env
+     var name genuinely differs from the Python field name.
+
+4. model_validate instead of direct instantiation.
+   - Bypasses BaseSettings resolution stack silently.
+   - No error — just wrong behavior.
+
+5. str(None) → "None" string in os.environ.
+   - Always skip None values when injecting overrides.
+
+
+BUG LOG — TOPIC 8
+───────────────────
+Warm-up:
+  - Missing return v in @field_validator (silent None on success)
+  - model_validate used instead of direct instantiation
+  - alias= on every field (redundant with case_sensitive=False)
+  - Calls 2 and 3 conflated — env var injection never demonstrated
+  - str(None) written to os.environ for alert_webhook_url
+
+Challenge:
+  - os.environ.clear() instead of targeted key cleanup
+  - No try/finally — cleanup only ran on success
+
+Debugging:
+  - Missing return self in mode="after" validator
+  - No try/finally in factory function
+
+
+EXERCISES WRITTEN
+──────────────────
+Warm-up:
+  TrainingServiceSettings with field validator on URL format,
+  three instantiation patterns: kwargs, env var injection,
+  failure case with ValidationError catch.
+
+Challenge:
+  StorageSettings (nested BaseModel) + MLPipelineSettings
+  (BaseSettings) with cross-field production/staging rules;
+  get_pipeline_settings factory with env override injection
+  and guaranteed cleanup; four test calls covering valid and
+  failure cases.
+
+Debugging:
+  InferenceServiceSettings with ResourceLimits nested model;
+  load_inference_settings factory — two bugs: missing return self
+  in model validator, no try/finally for env var cleanup.
+
+══════════════════════════════════════════════════════════════════
