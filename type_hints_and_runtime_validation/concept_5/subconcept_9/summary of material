@@ -1,0 +1,205 @@
+══════════════════════════════════════════════════════════════════
+PYDANTIC V2 — TOPIC 9: PYDANTIC VS DATACLASS VS TYPEDDICT
+Revision Report
+══════════════════════════════════════════════════════════════════
+
+CORE PURPOSE
+────────────
+Choose the right structured data container based on where in
+the system the data lives and what guarantees are needed there.
+The choice is not aesthetic — it reflects a design decision
+about validation boundaries and data ownership.
+
+
+THE BOUNDARY VS INTERIOR DISTINCTION
+──────────────────────────────────────
+BaseModel   → boundary layer
+              Data enters here from untrusted sources: API payloads,
+              config files, env vars, deserialized JSON.
+              Pydantic validates and coerces on construction.
+              Runtime cost paid once, at the edge.
+
+dataclass   → interior layer
+              Structured data that moves between pipeline stages
+              after validation has already occurred.
+              No runtime validation — typed containers only.
+              Fast, lightweight, composable with __slots__.
+
+TypedDict   → shape annotation only
+              Not instantiated as a domain object.
+              Used to type dicts that already exist: API payloads,
+              JSON blobs, function signatures receiving plain dicts.
+              No runtime enforcement — type checker only.
+              Signals "this dict is expected to have this shape."
+
+
+WHEN TO USE EACH
+─────────────────
+Use BaseModel when:
+  - Data arrives from outside your system
+  - You need validation, coercion, or field constraints
+  - You need serialization / deserialization (model_dump, model_validate)
+  - You need computed properties or validators on the data
+
+Use dataclass when:
+  - Data has already been validated at a boundary
+  - You need a lightweight typed container to pass between stages
+  - You want fast construction with no overhead
+  - You need mutable structured state inside a pipeline
+
+Use TypedDict when:
+  - You're typing a function that accepts or returns a plain dict
+  - You're describing the shape of an external API payload
+  - You want type checker support without imposing a class on callers
+  - The data never needs to be instantiated as a domain object
+
+
+TYPEDDICT PATTERNS
+───────────────────
+from typing import TypedDict
+
+class PayloadShape(TypedDict):
+    name: str
+    value: float
+    tags: list[str]
+
+def process(payload: PayloadShape) -> None: ...
+
+TypedDict does not validate at runtime. Passing a dict with
+wrong types satisfies the type checker at the call site but
+produces no error at construction. It is a documentation and
+static analysis tool, not a runtime safety tool.
+
+
+DATACLASS PATTERNS
+───────────────────
+from dataclasses import dataclass, field
+
+@dataclass
+class PipelineResult:
+    config: ValidatedConfig        # already validated
+    run_id: str
+    elapsed_seconds: float
+    warnings: list[str] = field(default_factory=list)
+
+RULES:
+- Mutable defaults (lists, dicts) require field(default_factory=...)
+  Same rule as Pydantic's Field(default_factory=...) — never assign
+  [] or {} directly as a default on a dataclass field.
+- dataclass does not validate types at runtime. A field typed as
+  float accepts any value without error.
+- Use dataclass for results, intermediate state, and interior
+  data structures that travel between validated pipeline stages.
+
+
+CLASSMETHOD ENTRY POINTS ON BASEMODEL
+───────────────────────────────────────
+@classmethod
+def from_payload(cls, payload: PayloadType) -> "ModelName":
+    return cls.model_validate(payload)
+
+RULES:
+- Use cls, not the hardcoded class name — supports subclassing.
+- model_validate is the correct entry point for dict-shaped input.
+- TypedDict as the payload type annotation makes the boundary
+  explicit: this method accepts raw external data.
+
+
+MUTATION BUG PATTERN
+─────────────────────
+def primary_features(self) -> list[str]:
+    features = self.feature_columns        # reference, not copy
+    features.remove(self.target_column)    # mutates the model field
+
+self.feature_columns is a reference to the model's internal list.
+Assigning it to a local variable and calling .remove() modifies
+the actual field. Every subsequent read of self.feature_columns
+sees corrupted data.
+
+Fix: always copy before mutating:
+    features = list(self.feature_columns)
+    features = self.feature_columns.copy()
+
+
+FORMAT STRING VS VALIDATOR CONSISTENCY
+────────────────────────────────────────
+If a validator enforces a prefix on a field value (e.g. "v"),
+the field already carries that prefix. A format string that
+adds the same prefix again produces a double prefix.
+
+Pattern to check: anywhere a format string references a field
+that a validator has already transformed or normalized.
+
+
+GOTCHAS
+───────
+1. Missing return self in mode="after" validators.
+   - Five-topic recurring regression (Topics 4, 6, 7, 8, 9).
+   - Check this before anything else in every mode="after" validator.
+
+2. Mutating model fields through reference assignment.
+   - list assignment is not a copy.
+   - Any in-place operation (.remove, .append, .sort, .pop) on
+     a "local" variable that points to a model field modifies
+     the model. Always copy first.
+
+3. str.join() requires an iterable of strings.
+   - int values in a generator passed to join() raise TypeError.
+   - Fix: str(int(v * 100)) inside the generator expression.
+
+4. TypedDict does not enforce key presence at runtime.
+   - dict[Literal["a","b","c"], float] prevents unknown keys
+     but does not require all three keys to be present.
+   - Explicit set comparison in a validator is required if
+     exact key presence must be guaranteed.
+
+5. Format string doubling a validator-enforced prefix.
+   - If a validator requires model_version.startswith("v"),
+     the field value is already "v1.2.0".
+     f"v{self.model_version}" produces "vv1.2.0".
+
+
+BUG LOG — TOPIC 9
+───────────────────
+Warm-up:
+  - experiment_name missing from ValidatedExperimentConfig
+    (field silently dropped during validation)
+  - tags: list instead of list[str] — type specificity lost
+  - cls not used in from_payload classmethod
+
+Challenge:
+  - Missing return self in split_ratios_validate (fifth occurrence)
+  - primary_features mutates self.feature_columns via reference
+  - describe() passes int to str.join() — TypeError at runtime
+  - split_ratios key presence not validated
+    (Literal keys prevent unknown keys, not missing keys)
+  - Wrong type hint on build_feature_pipeline payload parameter
+
+Debugging:
+  - describe() prepended "v" to model_version field that the
+    validator already required to start with "v" — double prefix
+
+
+EXERCISES WRITTEN
+──────────────────
+Warm-up:
+  RawExperimentPayload (TypedDict) / ValidatedExperimentConfig
+  (BaseModel with from_payload classmethod) / PipelineResult
+  (dataclass); two test calls covering valid and invalid input.
+
+Challenge:
+  FeatureStorePayload (TypedDict) / FeatureStoreConfig (BaseModel
+  with split_ratios sum + key presence validation, primary_features,
+  describe) / ProcessedFeatureSet (dataclass with warnings);
+  build_feature_pipeline factory with warning collection;
+  three test calls covering valid, warning-triggering, and
+  invalid split ratios.
+
+Debugging:
+  ModelRegistryPayload (TypedDict) / ModelRegistryConfig (BaseModel
+  with version prefix and accuracy range validation, primary_metrics,
+  describe) / RegisteredModel (dataclass); register_model factory
+  with size and metrics warnings — one bug: double "v" prefix in
+  describe() format string.
+
+══════════════════════════════════════════════════════════════════
