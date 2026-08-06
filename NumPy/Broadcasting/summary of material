@@ -1,0 +1,127 @@
+=============================================================
+NUMPY TOPIC 4 — BROADCASTING
+Revision Report
+=============================================================
+
+CORE PURPOSE
+------------
+Broadcasting lets NumPy perform operations between arrays of different
+shapes by virtually expanding the smaller array to match the larger one
+— without copying memory. It's the mechanism behind per-column
+normalization, bias addition in neural networks, pairwise distance
+computation, and nearly every operation in an ML forward pass.
+
+THE BROADCASTING RULESET
+------------------------
+1. Pad the smaller shape with 1s on the LEFT until ndims match
+2. For each dimension: sizes must match OR one of them must be 1
+3. Dimensions of size 1 are stretched to match the other size
+4. If any dimension fails rule 2 → ValueError
+
+Always align shapes from the RIGHT before applying rules.
+
+WORKED EXAMPLES
+---------------
+(2, 3) + (3,)   → (2,3) + (1,3) → (2,3)   ✓ dim0: 2vs1→2, dim1: 3vs3
+(4, 1) + (3,)   → (4,1) + (1,3) → (4,3)   ✓ dim0: 4vs1→4, dim1: 1vs3→3
+(4, 3) + (4,)   → (4,3) + (1,4) → ERROR   ✗ dim1: 3vs4, neither is 1
+(1,10,8)-(10,1,8)              → (10,10,8) ✓ 1vs10→10, 10vs1→10, 8vs8
+
+KEY SYNTAX
+----------
+# Reshape for broadcasting control
+a.reshape(-1, 1)          # (n,) → (n,1) — column vector
+a[np.newaxis, :, :]       # (n,m) → (1,n,m)
+a[:, np.newaxis, :]       # (n,m) → (n,1,m)
+
+# Per-column operations — (n,) broadcasts over (m,n) from the right
+X - X.mean(axis=0)        # center each feature column
+X / X.std(axis=0)         # scale each feature column
+
+# Per-row operations — need (m,1) not (m,)
+row_sums = X.sum(axis=1).reshape(-1, 1)   # (m,1) broadcasts over (m,n)
+X / row_sums
+
+# Outer product via broadcasting
+a.reshape(-1, 1) * b      # (n,1) * (m,) → (n,m)
+
+# Pairwise squared distance matrix
+diff = A[np.newaxis,:,:] - A[:,np.newaxis,:]  # (1,n,d)-(n,1,d)→(n,n,d)
+dist = np.sum(diff**2, axis=2)                # (n,n)
+
+PATTERNS
+--------
+# Batch normalisation from scratch
+mean  = X.mean(axis=0)                        # (d,)
+var   = X.var(axis=0)                         # (d,)
+X_norm = (X - mean) / np.sqrt(var + 1e-8)    # (n,d) - (d,) → valid
+out   = gamma * X_norm + beta                 # gamma,beta shape (d,)
+
+# Row-wise L2 normalisation
+norms = np.sqrt(np.sum(X**2, axis=1)).reshape(-1, 1)  # (n,1)
+X_unit = X / norms                            # (n,d) / (n,1) → (n,d)
+
+# Per-column scaling
+X * scales                # scales shape (d,) — valid, no reshape needed
+
+# Bias addition to every sample in a batch
+batch + bias              # bias shape (d,) — valid
+
+GOTCHAS
+-------
+1. (n,) is not (n,1) — this is the most common broadcasting mistake
+   X / row_values          → (n,d)/(n,) pads to (1,n) → wrong axis → error
+   X / row_values.reshape(-1,1)  → (n,d)/(n,1) → correct
+
+2. Elementwise multiply ≠ outer product
+   a * b                   → (n,) * (n,) → (n,)  elementwise
+   a.reshape(-1,1) * b     → (n,1) * (n,) → (n,n) outer product
+
+3. "Runs without errors" ≠ correct
+   a * b when you want outer product: no crash, wrong shape, wrong result
+   Always verify output shape and a sample value
+
+4. Always align from the right
+   (4,3) + (4,) → pads to (1,4) → dim1: 3vs4 → ERROR
+   Fix: reshape to (4,1)
+
+5. Global vs per-axis operations
+   X.mean()        → scalar  (global)
+   X.mean(axis=0)  → (d,)    (per column)
+   X.mean(axis=1)  → (n,)    (per row)
+   Wrong axis = silent wrong result, no error
+
+6. Postcondition verification is not optional
+   After normalisation: print mean and std of result
+   After distance matrix: print diagonal (should be all zeros)
+   After row normalisation: print row norms of result (should be all 1.0)
+
+WHEN TO RESHAPE
+---------------
+Operating on rows (applying per-row value): reshape (n,) → (n,1)
+Operating on columns (applying per-col value): (d,) broadcasts as-is
+Pairwise operations over n items: use np.newaxis to create (n,1,d)
+  and (1,n,d) views
+
+EXERCISES COMPLETED
+-------------------
+Warm-up:
+  - Per-column mean subtraction (centering)
+  - Per-row L2 normalisation with reshape(-1,1) + verification logic
+
+Challenge:
+  Part A — Batch normalisation from scratch:
+    per-feature mean, variance, epsilon-stabilised normalisation,
+    gamma/beta scaling, shape and postcondition verification
+  Part B — Pairwise squared distance matrix (10,10) via 3D broadcasting:
+    np.newaxis reshape trick, diff shape (10,10,8), sum over axis=2
+
+Debugging:
+  Bugs found and fixed:
+  1. X.sum(axis=1) → .reshape(-1,1)
+     shape (8,) pads to (1,8), wrong axis, ValueError
+  2. a * b → a.reshape(-1,1) * b
+     elementwise multiply produces (3,) not (3,3) outer product —
+     silent wrong result, no crash
+
+=============================================================
