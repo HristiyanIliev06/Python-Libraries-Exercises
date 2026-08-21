@@ -8,7 +8,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class PipelineSettings(BaseSettings):
-    configure = SettingsConfigDict(env_file="pipeline.env", env_file_encoding="utf-8", case_sensitive=False)
+    model_config = SettingsConfigDict(env_file="pipeline.env", env_file_encoding="utf-8", case_sensitive=False)
     dataset_path: str
     output_dir: str
     batch_size: int = Field(default = 32, ge = 1, le = 512) 
@@ -24,19 +24,26 @@ class PipelineSettings(BaseSettings):
 
         return self
 
-    def load_pipeline_settings(overrides: dict | None = None) -> "PipelineSettings":
-        overrides_keys = []
-        if overrides is not None:
-            for k, v in overrides.items():
-                k: str
-                if v is not None:
-                    os.environ[k.upper()] = str(v)
-                    overrides_keys.append(k.upper())
-        try:
-            return PipelineSettings()
-        finally:
-            for k in overrides_keys:
-                os.environ.pop(k, None)
+    @field_validator("dataset_path", "output_dir", mode="before")
+    @classmethod
+    def validate_absolute_path(cls, v: str) -> str:
+        if not os.path.isabs(v):
+            raise ValueError(f"Path must be absolute: {v}")
+        return v
+
+def load_pipeline_settings(overrides: dict | None = None) -> "PipelineSettings":
+    overrides_keys = []
+    if overrides is not None:
+        for k, v in overrides.items():
+            k: str
+            if v is not None:
+                os.environ[k.upper()] = str(v)
+                overrides_keys.append(k.upper())
+    try:
+        return PipelineSettings()
+    finally:
+        for k in overrides_keys:
+            os.environ.pop(k, None)
 
 class RawTextSample(BaseModel):
     sample_id: str = Field(pattern = r"^[a-z0-9\-]+$") 
@@ -51,7 +58,7 @@ class RawTextSample(BaseModel):
         if not v.strip():
             raise ValueError("Text must be non-empty")
 
-        return v
+        return v.strip()
 
 class PreprocessingConfig(BaseModel):
     lowercase: bool = True
@@ -93,7 +100,7 @@ class PipelineBatch:
         return len([item for item in self.samples if item.was_truncated])
 
     def describe(self) -> str: 
-        return f"Batch {self.batch_id}: {self.size()} samples | {self.truncated_count()} truncated | warnings: {self.warnings}"
+        return f"Batch {self.batch_id}: {self.size()} samples | {self.truncated_count()} truncated | warnings: {len(self.warnings)}"
 
 def run_pipeline(raw_samples: list[dict], preprocessing_config: dict, settings: PipelineSettings) -> PipelineBatch:
     validated_samples: list[RawTextSample] = []
@@ -104,7 +111,7 @@ def run_pipeline(raw_samples: list[dict], preprocessing_config: dict, settings: 
             validated_sample = RawTextSample.model_validate(raw_sample)
             validated_samples.append(validated_sample)
         except ValidationError as error:
-            warnings.append(f"Skipped invalid sample {raw_sample.sample_id}: {error}")
+            warnings.append(f"Skipped invalid sample {raw_sample['sample_id']}: {error}")
 
     config = PreprocessingConfig.model_validate(preprocessing_config, context={"settings": settings})
 
@@ -143,7 +150,7 @@ def run_pipeline(raw_samples: list[dict], preprocessing_config: dict, settings: 
 
     return PipelineBatch(
         batch_id = batch_id,
-        processed_samples = processed_samples,
+        samples = processed_samples,
         settings_snapshot = settings,
         warnings = warnings,
     )
@@ -176,3 +183,40 @@ valid_batch = run_pipeline(
     settings = valid_batch_settings,
 )
 print(valid_batch.describe())
+
+invalid_raw_samples = [
+    {"sample_id": "sample-001", "text": "This is a sample text for testing.", "label": "test", "source": "web"},
+    {"sample_id": "invalid_sample_id!", "text": "This sample has an invalid ID.", "label": "invalid", "source": "books"},
+    {"sample_id": "sample-003", "text": "Yet another sample text to process.", "label": "sample", "source": "academic"},
+]
+
+try:
+    invalid_batch = run_pipeline(
+        raw_samples = invalid_raw_samples,
+        preprocessing_config = {"lowercase": True, "strip_punctuation": False, "max_length": 10, "filters": []},
+        settings = valid_batch_settings,
+    )
+    print(invalid_batch.describe())
+except ValidationError as e:
+    print(f"ValidationError caught: {e}")
+
+invalid_preprocessing_config = {"lowercase": True, "strip_punctuation": False, "max_length": 1024, "filters": []}
+try:
+    run_pipeline(
+        raw_samples = valid_raw_samples,
+        preprocessing_config = invalid_preprocessing_config,
+        settings = valid_batch_settings,
+    )
+except ValidationError as e:
+    print(f"ValidationError caught: {e}")
+
+
+try:
+    invalid_settings = load_pipeline_settings({
+        "dataset_path": "/path/to/dataset",
+        "output_dir": "/path/to/output",
+        "environment": "production",
+        "enable_augmentation": True,
+    })
+except ValidationError as e:
+    print(f"ValidationError caught: {e}")
